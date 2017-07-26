@@ -1,22 +1,23 @@
 #!/usr/bin/env python
 """Provides sampling of graphs."""
 
-
+from toolz.curried import pipe, concat
 import scipy as sp
 import numpy as np
 from sklearn.neighbors import NearestNeighbors
+from eden.graph import Vectorizer
+import random
 from sklearn.metrics.pairwise import cosine_similarity
-from sklearn.model_selection import cross_val_predict
-from sklearn.linear_model import SGDClassifier
-from sklearn.model_selection import StratifiedKFold
 from sklearn.metrics.pairwise import euclidean_distances
 import multiprocessing
 from eden import apply_async
-from eden.graph import Vectorizer
 from pareto_graph_optimizer import optimize_desired_distances
 from pareto_graph_optimizer import GrammarWrapper
 from pareto_graph_optimizer import MultiObjectiveCostEstimator
-from pareto_graph_optimizer import diversity_pareto_selection
+# from pareto_graph_optimizer import diversity_pareto_selection
+from pareto_graph_optimizer import SimVolPredStdSizeMultiObjectiveCostEstimator
+from pareto_graph_optimizer import get_pareto_set
+
 
 import logging
 logger = logging.getLogger(__name__)
@@ -55,82 +56,82 @@ def min_similarity_selection(matrix, scores=None, max_num=None):
     return select_ids
 
 
-def compute_score(x, y, k=5):
-    # induce classification model and compute cross validated confidence
-    # compute std estimate of the score for each instance
-    y_preds = []
-    n_iterations = 5
-    for rnd in range(n_iterations):
-        sgd = SGDClassifier(average=True,
-                            class_weight='balanced',
-                            shuffle=True,
-                            n_jobs=-1,
-                            random_state=rnd)
-        cv = StratifiedKFold(n_splits=5, random_state=rnd)
-        y_pred = cross_val_predict(sgd, x, y,
-                                   method='decision_function', cv=cv)
-        y_preds.append(y_pred)
-    y_preds = np.array(y_preds).T
-    mean_y_preds = np.mean(y_preds, axis=1)
-    std_y_preds = np.std(y_preds, axis=1)
-    # predictive score is the mean+std
-    preds = mean_y_preds + std_y_preds
-    # compute score averaging k neighbors
-    nn = NearestNeighbors()
-    nn.fit(x)
-    distances, neighbors = nn.kneighbors(x, k)
-    cum_dists = np.sum(distances, axis=1)
-    avg_scores = np.multiply(cum_dists[neighbors], preds[neighbors])
-    vol_scores = np.sum(avg_scores, axis=1)
-    # the idea is to find the largest volume, i.e. the most diverse set
-    # that is at the same time high scoring
-    # for each vertex we compute the sum of the distances to other neighbors
-    # we weight each cumulative distance by the score of each neighbor
-    # we consider as score the cumulative score in the neighborhood
-    return vol_scores
+def _outliers(graphs, k=3):
+    vec = Vectorizer(r=3, d=3,
+                     normalization=False, inner_normalization=False, n_jobs=1)
+    x = vec.transform(graphs)
+    knn = NearestNeighbors()
+    knn.fit(x)
+    neigbhbors = knn.kneighbors(x, n_neighbors=k, return_distance=False)
+    outlier_list = []
+    non_outlier_list = []
+    for i, ns in enumerate(neigbhbors):
+        not_outlier = False
+        for n in ns[1:]:
+            if i in list(neigbhbors[n, :]):
+                not_outlier = True
+                break
+        if not_outlier is False:
+            outlier_list.append(i)
+        else:
+            non_outlier_list.append(i)
+    return outlier_list, non_outlier_list
 
 
-def make_data(pos_graphs, neg_graphs, vec):
-    # prepare x,y
-    y = [1] * len(pos_graphs) + [-1] * len(neg_graphs)
-    all_graphs = pos_graphs + neg_graphs
-    x = vec.transform(all_graphs)
-    return all_graphs, x, y
+def _select_non_outliers(graphs, k=3):
+    outlier_list, non_outlier_list = _outliers(graphs, k)
+    graphs = [graphs[i] for i in non_outlier_list]
+    logging.info('outlier removal:%d' % len(graphs))
+    return graphs
 
 
-def select_diverse_representative_set(all_graphs, x, scores,
-                                      size=18, top_perc=0.1):
-    # sort ids from the most uncertain average prediction
-    ids = np.argsort(-scores)
-    # select a perc of the num of positives
-    k_top_scoring = int(len(all_graphs) * top_perc)
-    sel_ids = ids[:k_top_scoring]
-    sel_vecs = x[sel_ids]
-    sel_scores = scores[sel_ids]
-    # compute the similarity matrix as cos similarity
-    similarity_matrix = cosine_similarity(sel_vecs)
-    # select 'size' most different instances
-    rel_seed_ids = min_similarity_selection(similarity_matrix,
-                                            scores=sel_scores,
-                                            max_num=size)
-    seed_ids = [sel_ids[i] for i in rel_seed_ids]
-    sel_seed_graphs = [all_graphs[gid] for gid in seed_ids]
-    return seed_ids, sel_seed_graphs
+def _remove_similar_pairs(graphs):
+    vec = Vectorizer(r=3, d=3,
+                     normalization=False, inner_normalization=False, n_jobs=1)
+    x = vec.transform(graphs)
+    matrix = cosine_similarity(x)
+    scores = np.array([1] * len(graphs))
+    ids = min_similarity_selection(matrix,
+                                   scores=scores,
+                                   max_num=len(graphs) / 2)
+    graphs = [graphs[i] for i in ids]
+    logging.info('similar pairs removal:%d' % len(graphs))
+    return graphs
 
 
-def select_seeds(pos_graphs, neg_graphs, vec,
-                 size=18, top_perc=0.1, k=5, improve=True):
-    all_graphs, x, y = make_data(pos_graphs, neg_graphs, vec)
-    # compute score as mean confidence in k neighbors
-    scores = compute_score(x, y, k)
-    if improve is False:
-        # score is high if the prediction is near zero
-        scores = 1 / (1 + np.absolute(scores))
-    dat = select_diverse_representative_set(all_graphs, x, scores,
-                                            size, top_perc)
-    seed_ids, sel_seed_graphs = dat
-    seed_scores = scores[seed_ids]
-    return seed_ids, sel_seed_graphs, seed_scores
+def _size_filter(graphs, fraction_to_remove=.1):
+    frac = 1.0 - fraction_to_remove / 2
+    size = len(graphs)
+    graphs = sorted(graphs, key=lambda g: len(g))[:int(size * frac)]
+    graphs = sorted(graphs, key=lambda g: len(g), reverse=True)
+    graphs = graphs[:int(size * frac)]
+    logging.info('size filter:%d' % len(graphs))
+    return graphs
+
+
+def _random_sample(graphs, max_size):
+    if len(graphs) > max_size:
+        graphs = random.sample(graphs, max_size)
+    logging.info('random sample:%d' % len(graphs))
+    return graphs
+
+
+def pre_process(graphs,
+                fraction_to_remove=.1,
+                n_neighbors_for_outliers=3,
+                remove_similar=True,
+                max_size=500):
+    """pre_process."""
+    logging.info('original size:%d' % len(graphs))
+    graphs = _random_sample(graphs, 3000)
+    graphs = _size_filter(graphs, fraction_to_remove)
+    graphs = _select_non_outliers(graphs, k=n_neighbors_for_outliers)
+    if remove_similar:
+        graphs = _remove_similar_pairs(graphs)
+    graphs = _random_sample(graphs, max_size)
+    return graphs
+
+# ---------------------------------------------------------------------------
 
 
 def optimize_single(reference_graph,
@@ -141,6 +142,7 @@ def optimize_single(reference_graph,
                     cost_estimator,
                     nearest_neighbors,
                     n_iter=100):
+    """optimize_single."""
     reference_vec = vectorizer.transform([reference_graph])
     # find neighbors
     neighbors = nearest_neighbors.kneighbors(reference_vec,
@@ -155,31 +157,30 @@ def optimize_single(reference_graph,
     desired_distances = euclidean_distances(avg_reference_vec,
                                             reference_vecs)[0]
 
-    max_neighborhood_order = 2
-    max_neighborhood_size = 100
+    max_neighborhood_order = 1
     max_n_iter = 100
-    graphs_tuple = optimize_desired_distances(reference_graph,
-                                              desired_distances,
-                                              reference_graphs,
-                                              vectorizer,
-                                              grammar,
-                                              cost_estimator,
-                                              max_neighborhood_order,
-                                              max_neighborhood_size,
-                                              max_n_iter)
-    return graphs_tuple
+    pareto_set_graphs = optimize_desired_distances(reference_graph,
+                                                   desired_distances,
+                                                   reference_graphs,
+                                                   vectorizer,
+                                                   grammar,
+                                                   cost_estimator,
+                                                   max_neighborhood_order,
+                                                   max_n_iter)
+    return pareto_set_graphs
 
 
-def optimize_set(reference_graphs,
-                 all_graphs,
-                 all_vecs,
-                 vectorizer,
-                 grammar,
-                 cost_estimator,
-                 nearest_neighbors,
-                 n_iter=100):
+def optimize_parallel(reference_graphs,
+                      all_graphs,
+                      all_vecs,
+                      vectorizer,
+                      grammar,
+                      cost_estimator,
+                      nearest_neighbors,
+                      n_iter=100):
+    """optimize_parallel."""
     pool = multiprocessing.Pool()
-    graphs_tuple_list = [apply_async(
+    res = [apply_async(
         pool, optimize_single, args=(g,
                                      all_graphs,
                                      all_vecs,
@@ -188,59 +189,103 @@ def optimize_set(reference_graphs,
                                      cost_estimator,
                                      nearest_neighbors,
                                      n_iter))
-                         for g in reference_graphs]
-    graphs_tuple_list = [p.get() for p in graphs_tuple_list]
+           for g in reference_graphs]
+    pareto_set_graphs_list = [p.get() for p in res]
     pool.close()
     pool.join()
-    return graphs_tuple_list
+    return pareto_set_graphs_list
 
 
-def optimize(pos_graphs,
-             neg_graphs,
-             n_seeds=3,
-             n_neighbors=5,
-             min_count=2,
-             max_neighborhood_size=100,
-             return_references=True,
-             improve=True):
+def optimize_seeds(pos_graphs,
+                   neg_graphs,
+                   seed_graphs=None,
+                   vectorizer=None,
+                   n_neighbors=5,
+                   min_count=2,
+                   max_neighborhood_size=100,
+                   max_n_neighbors=10,
+                   n_neigh_steps=2,
+                   improve=True):
+    """optimize."""
     all_graphs = pos_graphs + neg_graphs
     np, nn = len(pos_graphs), len(neg_graphs)
     logger.info('#positive graphs:%5d   #negative graphs:%5d' % (np, nn))
+    logger.info('#seed graphs:%5d' % (len(seed_graphs)))
 
-    vectorizer = Vectorizer(r=3, d=3,
-                            normalization=False,
-                            inner_normalization=False,
-                            n_jobs=1)
     grammar = GrammarWrapper(vectorizer,
                              radius_list=[1, 2, 3],
                              thickness_list=[2],
                              min_cip_count=min_count,
-                             min_interface_count=min_count)
+                             min_interface_count=min_count,
+                             max_n_neighbors=max_n_neighbors,
+                             n_neigh_steps=n_neigh_steps,
+                             max_neighborhood_size=max_n_neighbors)
     grammar.fit(all_graphs)
     logger.info('%s' % grammar)
 
-    cost_estimator = MultiObjectiveCostEstimator(vectorizer, improve).fit(
-        pos_graphs, neg_graphs)
-
-    res = select_seeds(pos_graphs, neg_graphs, vectorizer, size=n_seeds,
-                       top_perc=0.25, k=5, improve=improve)
-    seed_ids, sel_seed_graphs, seed_scores = res
-
+    moce = MultiObjectiveCostEstimator(vectorizer, improve)
+    moce.fit(pos_graphs, neg_graphs)
     all_vecs = vectorizer.transform(all_graphs)
     nearest_neighbors = NearestNeighbors(n_neighbors=n_neighbors).fit(all_vecs)
+    pareto_set_graphs_list = optimize_parallel(seed_graphs,
+                                               all_graphs,
+                                               all_vecs,
+                                               vectorizer,
+                                               grammar,
+                                               moce,
+                                               nearest_neighbors)
 
-    graphs_tuple_list = optimize_set(sel_seed_graphs, all_graphs, all_vecs,
-                                     vectorizer, grammar, cost_estimator,
-                                     nearest_neighbors)
-    pareto_set_graphs, sel_seed_graphs = diversity_pareto_selection(
-        sel_seed_graphs,
-        graphs_tuple_list,
+    tot_size = sum(len(graphs) for graphs in pareto_set_graphs_list)
+    msg = 'pareto set sizes [%d]: ' % tot_size
+    for graphs in pareto_set_graphs_list:
+        msg += '[%d]' % len(graphs)
+    logger.info(msg)
+    return pipe(pareto_set_graphs_list, concat, list)
+
+
+def optimize(pos_graphs,
+             neg_graphs,
+             n_neighbors=5,
+             min_count=2,
+             max_neighborhood_size=None,
+             max_n_neighbors=None,
+             n_neigh_steps=1,
+             class_discretizer=2,
+             class_std_discretizer=1,
+             similarity_discretizer=10,
+             size_discretizer=1,
+             volume_discretizer=10,
+             improve=True):
+    """optimize."""
+    vec = Vectorizer(r=3, d=3,
+                     normalization=True, inner_normalization=True,
+                     n_jobs=1)
+    moce = SimVolPredStdSizeMultiObjectiveCostEstimator(
+        vec,
+        class_discretizer=class_discretizer,
+        class_std_discretizer=class_std_discretizer,
+        similarity_discretizer=similarity_discretizer,
+        size_discretizer=size_discretizer,
+        volume_discretizer=volume_discretizer,
+        improve=improve)
+    moce.fit(pos_graphs, neg_graphs)
+    costs = moce.compute(pos_graphs + neg_graphs)
+    seed_pareto_set_graphs = get_pareto_set(pos_graphs + neg_graphs, costs)
+    vec_nn = Vectorizer(r=3, d=3,
+                        normalization=False, inner_normalization=False,
+                        n_jobs=1)
+    pareto_set_graphs = optimize_seeds(
         pos_graphs,
         neg_graphs,
-        vectorizer,
-        improve)
-    result = []
-    result.append(pareto_set_graphs)
-    if return_references:
-        result.append(sel_seed_graphs)
-    return result
+        seed_graphs=seed_pareto_set_graphs,
+        vectorizer=vec_nn,
+        n_neighbors=n_neighbors,
+        min_count=min_count,
+        max_neighborhood_size=max_neighborhood_size,
+        max_n_neighbors=max_n_neighbors,
+        n_neigh_steps=n_neigh_steps,
+        improve=improve)
+    pareto_set_costs = moce.compute(pareto_set_graphs)
+    sel_pareto_set_graphs = get_pareto_set(pareto_set_graphs, pareto_set_costs)
+    logger.info('#constructed graphs:%5d' % (len(sel_pareto_set_graphs)))
+    return sel_pareto_set_graphs
