@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Provides sampling of graphs."""
+"""Provides utilities for subsampling."""
 
 import numpy as np
 from sklearn.neighbors import NearestNeighbors
@@ -105,13 +105,14 @@ def _random_sample(graphs, max_size):
 
 
 def pre_process(graphs,
+                initial_max_size=3000,
                 fraction_to_remove=.1,
                 n_neighbors_for_outliers=3,
                 remove_similar=True,
                 max_size=500):
     """pre_process."""
     logging.info('original size:%d' % len(graphs))
-    graphs = _random_sample(graphs, 3000)
+    graphs = _random_sample(graphs, initial_max_size)
     graphs = _size_filter(graphs, fraction_to_remove)
     graphs = _select_non_outliers(graphs, k=n_neighbors_for_outliers)
     if remove_similar:
