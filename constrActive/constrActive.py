@@ -97,8 +97,7 @@ def optimize_seeds(pos_graphs,
     logger.info('#positive graphs:%5d   #negative graphs:%5d' % (np, nn))
     logger.info('#seed graphs:%5d' % (len(seed_graphs)))
 
-    grammar = GrammarWrapper(vectorizer,
-                             radius_list=[1, 2, 3],
+    grammar = GrammarWrapper(radius_list=[1, 2, 3],
                              thickness_list=[2],
                              min_cip_count=min_count,
                              min_interface_count=min_count,

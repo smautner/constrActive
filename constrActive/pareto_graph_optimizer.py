@@ -23,7 +23,6 @@ class GrammarWrapper(object):
     """GrammarWrapper."""
 
     def __init__(self,
-                 vectorizer,
                  radius_list=[0, 1, 2, 3],
                  thickness_list=[1],
                  min_cip_count=4,

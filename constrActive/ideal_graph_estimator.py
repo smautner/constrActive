@@ -21,10 +21,11 @@ logger = logging.getLogger(__name__)
 class IdealGraphEstimator(object):
     """Build an estimator for graphs."""
 
-    def __init__(self, min_count=3, discretization=50):
+    def __init__(self, min_count=3, discretization=50, max_n_neighbors=10):
         """construct."""
         self.min_count = min_count
         self.discretization = discretization
+        self.max_n_neighbors = max_n_neighbors
 
         self.clf = Perceptron(n_iter=500)
         self.vec = Vectorizer(r=3, d=6,
@@ -40,7 +41,8 @@ class IdealGraphEstimator(object):
             pos_graphs,
             neg_graphs,
             min_count=self.min_count,
-            discretization=self.discretization)
+            discretization=self.discretization,
+            max_n_neighbors=self.max_n_neighbors)
         self._fit(sel_constructed_graphs, pos_graphs, neg_graphs)
         return self
 
@@ -52,6 +54,9 @@ class IdealGraphEstimator(object):
         k = np.hstack([pairwise_kernels(x, z, metric='rbf', gamma=g)
                        for g in self.gs])
         step = len(ref_graphs) / 2
+        n_inst, n_feat = k.shape
+        txt = 'RFECV on %d instances with %d features with step: %d' % (n_inst, n_feat, step)
+        logger.info(txt)
         selector = RFECV(self.clf, step=step, cv=10)
         selector = selector.fit(k, y)
 
@@ -76,7 +81,9 @@ class IdealGraphEstimator(object):
         """partial_fit."""
         sel_constructed_graphs = self.partial_construct(
             sel_graphs, pos_graphs, neg_graphs,
-            min_count=self.min_count, discretization=self.discretization)
+            min_count=self.min_count,
+            discretization=self.discretization,
+            max_n_neighbors=self.max_n_neighbors)
         ref_graphs = self.ideal_graphs_ + sel_constructed_graphs
         self._fit(ref_graphs, pos_graphs, neg_graphs)
         return self
@@ -93,12 +100,13 @@ class IdealGraphEstimator(object):
                   pos_graphs,
                   neg_graphs,
                   min_count=2,
-                  discretization=20):
+                  discretization=20,
+                  max_n_neighbors=10):
         """construct."""
         args = dict(n_neighbors=15,
                     min_count=min_count,
-                    max_neighborhood_size=5,
-                    max_n_neighbors=5,
+                    max_neighborhood_size=max_n_neighbors,
+                    max_n_neighbors=max_n_neighbors,
                     n_neigh_steps=1,
                     class_discretizer=1000,
                     class_std_discretizer=discretization,
@@ -117,7 +125,8 @@ class IdealGraphEstimator(object):
                           pos_graphs,
                           neg_graphs,
                           min_count=2,
-                          discretization=20):
+                          discretization=20,
+                          max_n_neighbors=10):
         """partial_construct."""
         vec = Vectorizer(r=3, d=6,
                          normalization=True,
@@ -146,8 +155,8 @@ class IdealGraphEstimator(object):
             vectorizer=vecnn,
             n_neighbors=15,
             min_count=min_count,
-            max_neighborhood_size=20,
-            max_n_neighbors=20,
+            max_neighborhood_size=max_n_neighbors,
+            max_n_neighbors=max_n_neighbors,
             n_neigh_steps=1)
         costs = moce.compute(active_pareto_set_graphs)
         sel_active_pareto_set_graphs = get_pareto_set(active_pareto_set_graphs,
