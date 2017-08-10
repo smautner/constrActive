@@ -115,14 +115,6 @@ class MultiObjectiveCostEstimator(object):
         self.estimator = sgd.fit(x, y)
         return self
 
-    def score(self, graphs):
-        """score."""
-        x = self.vectorizer.transform(graphs)
-        scores = self.estimator.decision_function(x)
-        if self.improve is False:
-            scores = - np.absolute(scores)
-        return scores
-
     def fit_local(self, reference_graphs=None, desired_distances=None):
         """fit_local."""
         self.desired_distances = desired_distances
@@ -131,6 +123,14 @@ class MultiObjectiveCostEstimator(object):
         reference_sizes = [len(g) for g in reference_graphs]
         self.reference_size = np.percentile(reference_sizes, 50)
         return self
+
+    def score(self, graphs):
+        """score."""
+        x = self.vectorizer.transform(graphs)
+        scores = self.estimator.decision_function(x)
+        if self.improve is False:
+            scores = - np.absolute(scores)
+        return scores
 
     def predict_quality(self, graphs):
         """predict_quality."""
