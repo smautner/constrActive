@@ -14,6 +14,7 @@ from sklearn.metrics.pairwise import euclidean_distances
 from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.model_selection import train_test_split
 from sklearn.neighbors import NearestNeighbors
+from pareto_funcs import get_pareto_set
 
 import logging
 logger = logging.getLogger(__name__)
@@ -101,138 +102,79 @@ class MultiObjectiveCostEstimator(object):
     def __init__(self, vectorizer, improve=True):
         """init."""
         self.vectorizer = vectorizer
+        self.estimator = SGDClassifier(average=True,
+                                       class_weight='balanced',
+                                       shuffle=True,
+                                       n_jobs=1)
         self.improve = improve
 
     def fit(self, pos_graphs, neg_graphs):
         """fit."""
-        sgd = SGDClassifier(average=True,
-                            class_weight='balanced',
-                            shuffle=True,
-                            n_jobs=1)
         graphs = pos_graphs + neg_graphs
-        y = [1] * len(pos_graphs) + [-1] * len(neg_graphs)
-        x = self.vectorizer.transform(graphs)
-        self.estimator = sgd.fit(x, y)
+        self.y = [1] * len(pos_graphs) + [-1] * len(neg_graphs)
+        self.vecs = self.vectorizer.transform(graphs)
+        self._fit_class_objective(self.vecs, self.y)
         return self
+
+    def _fit_class_objective(self, x, y):
+        self.estimator = self.estimator.fit(x, y)
+        return self
+
+    def _estimate_class_objective(self, x):
+        scores = self.estimator.decision_function(x)
+        if self.improve is False:
+            scores = - np.absolute(scores)
+        return scores
+
+    def _fit_distance_objective(self,
+                                reference_graphs=None,
+                                desired_distances=None):
+        self.desired_distances = desired_distances
+        x = self.vectorizer.transform(reference_graphs)
+        self.reference_scores = self._estimate_class_objective(x)
+        self.reference_vecs = x
+
+    def _avg_relative_distance_diff(self, vector):
+        distances = euclidean_distances(vector, self.reference_vecs)[0]
+        d = self.desired_distances
+        relative_distance_diff = (distances - d) / d
+        avg_relative_distance_diff = np.mean(np.square(relative_distance_diff))
+        return avg_relative_distance_diff
+
+    def _estimate_distance_objective(self, x):
+        """predict_distance."""
+        return np.array([self._avg_relative_distance_diff(vec) for vec in x])
+
+    def _fit_size_objective(self, graphs):
+        self.reference_size = np.percentile([len(g) for g in graphs], 50)
+
+    def _estimate_size_objective(self, graphs):
+        sizes = np.array([len(g) for g in graphs])
+        size_diffs = np.absolute(sizes - self.reference_size)
+        return size_diffs
 
     def fit_local(self, reference_graphs=None, desired_distances=None):
         """fit_local."""
-        self.desired_distances = desired_distances
-        self.reference_vecs = self.vectorizer.transform(reference_graphs)
-        self.reference_scores = self.score(reference_graphs)
-        reference_sizes = [len(g) for g in reference_graphs]
-        self.reference_size = np.percentile(reference_sizes, 50)
-        return self
+        self._fit_distance_objective(reference_graphs, desired_distances)
+        self._fit_size_objective(reference_graphs)
 
-    def score(self, graphs):
-        """score."""
-        x = self.vectorizer.transform(graphs)
-        scores = self.estimator.decision_function(x)
-        if self.improve is False:
-            scores = - np.absolute(scores)
-        return scores
-
-    def predict_quality(self, graphs):
+    def _estimate_relative_class_objective(self, x):
         """predict_quality."""
-        scores = self.score(graphs)
+        scores = self._estimate_class_objective(x)
         qualities = []
         for score in scores:
             to_be_ranked = np.hstack([score, self.reference_scores])
             ranked = rankdata(-to_be_ranked, method='min')
             qualities.append(ranked[0])
         return np.array(qualities)
-
-    def discrepancy(self, vector):
-        """discrepancy."""
-        distances = euclidean_distances(vector, self.reference_vecs)[0]
-        return np.mean(np.square(distances - self.desired_distances))
-
-    def predict_distance(self, graphs):
-        """predict_distance."""
-        x = self.vectorizer.transform(graphs)
-        return np.array([self.discrepancy(vec) for vec in x])
-
-    def predict_size(self, graphs):
-        """predict_size."""
-        sizes = np.array([len(g) for g in graphs])
-        return np.absolute(sizes - self.reference_size)
 
     def compute(self, graphs):
         """predict."""
-        assert(graphs), 'moce'
-        q = self.predict_quality(graphs).reshape(-1, 1)
-        d = self.predict_distance(graphs).reshape(-1, 1)
-        s = self.predict_size(graphs).reshape(-1, 1)
+        x = self.vectorizer.transform(graphs)
+        q = self._estimate_relative_class_objective(x).reshape(-1, 1)
+        d = self._estimate_distance_objective(x).reshape(-1, 1)
+        s = self._estimate_size_objective(graphs).reshape(-1, 1)
         costs = np.hstack([q, d, s])
-        return costs
-
-# -----------------------------------------------------------------------------
-
-
-class DiversityMultiObjectiveCostEstimator(object):
-    """DiversityMultiObjectiveCostEstimator."""
-
-    def __init__(self, vectorizer, improve=True):
-        """init."""
-        self.vectorizer = vectorizer
-        self.improve = improve
-
-    def set_params(self, reference_graphs=None, all_graphs=None):
-        """set_params."""
-        self.all_vecs = self.vectorizer.transform(all_graphs)
-        self.reference_vecs = self.vectorizer.transform(reference_graphs)
-        self.reference_scores = self.score(reference_graphs)
-        reference_sizes = [len(g) for g in reference_graphs]
-        self.reference_size = np.percentile(reference_sizes, 50)
-
-    def fit(self, pos_graphs, neg_graphs):
-        """fit."""
-        sgd = SGDClassifier(average=True,
-                            class_weight='balanced',
-                            shuffle=True,
-                            n_jobs=1)
-        graphs = pos_graphs + neg_graphs
-        y = [1] * len(pos_graphs) + [-1] * len(neg_graphs)
-        x = self.vectorizer.transform(graphs)
-        self.estimator = sgd.fit(x, y)
-        return self
-
-    def score(self, graphs):
-        """score."""
-        x = self.vectorizer.transform(graphs)
-        scores = self.estimator.decision_function(x)
-        if self.improve is False:
-            scores = - np.absolute(scores)
-        return scores
-
-    def predict_quality(self, graphs):
-        """predict_quality."""
-        scores = self.score(graphs)
-        qualities = []
-        for score in scores:
-            to_be_ranked = np.hstack([score, self.reference_scores])
-            ranked = rankdata(-to_be_ranked, method='min')
-            qualities.append(ranked[0])
-        return np.array(qualities)
-
-    def predict_similarity(self, graphs):
-        """predict_similarity."""
-        x = self.vectorizer.transform(graphs)
-        similarity_matrix = cosine_similarity(x, self.all_vecs)
-        return np.mean(similarity_matrix, axis=1)
-
-    def predict_size(self, graphs):
-        """predict_size."""
-        sizes = np.array([len(g) for g in graphs])
-        return np.absolute(sizes - self.reference_size)
-
-    def compute(self, graphs):
-        """compute."""
-        assert(graphs), 'dmoce'
-        q = self.predict_quality(graphs).reshape(-1, 1)
-        k = self.predict_similarity(graphs).reshape(-1, 1)
-        s = self.predict_size(graphs).reshape(-1, 1)
-        costs = np.hstack([q, k, s])
         return costs
 
 # -----------------------------------------------------------------------------
@@ -284,14 +226,14 @@ class SimVolPredStdSizeMultiObjectiveCostEstimator(object):
         self.estimators = []
         for i in range(self.n_estimators):
             x_train, x_test, y_train, y_test = train_test_split(
-                x, y, test_size=0.33, random_state=i)
+                x, y, test_size=0.5, random_state=i)
             sgd = SGDClassifier(average=True,
                                 class_weight='balanced',
                                 shuffle=True,
                                 n_jobs=1)
             self.estimators.append(sgd.fit(x_train, y_train))
 
-    def _compute_class_objective(self, x):
+    def _estimate_class_objective(self, x):
         scores = [estimator.decision_function(x)
                   for estimator in self.estimators]
         scores = np.vstack(scores).T
@@ -306,7 +248,7 @@ class SimVolPredStdSizeMultiObjectiveCostEstimator(object):
     def _fit_similarity_objective(self, x):
         pass
 
-    def _compute_similarity_objective(self, x):
+    def _estimate_similarity_objective(self, x):
         similarity_matrix = cosine_similarity(x, self.vecs)
         sim = np.mean(similarity_matrix, axis=1)
         sim = (sim * self.similarity_discretizer).astype(int)
@@ -315,7 +257,7 @@ class SimVolPredStdSizeMultiObjectiveCostEstimator(object):
     def _fit_size_objective(self, graphs):
         self.reference_size = np.percentile([len(g) for g in graphs], 50)
 
-    def _compute_size_objective(self, graphs):
+    def _estimate_size_objective(self, graphs):
         sizes = np.array([len(g) for g in graphs])
         size_diffs = np.absolute(sizes - self.reference_size)
         size_diffs = (size_diffs * self.size_discretizer).astype(int)
@@ -325,7 +267,7 @@ class SimVolPredStdSizeMultiObjectiveCostEstimator(object):
         self.nn_estimator = NearestNeighbors()
         self.nn_estimator = self.nn_estimator.fit(x)
 
-    def _compute_volume_objective(self, x):
+    def _estimate_volume_objective(self, x):
         distances, neighbors = self.nn_estimator.kneighbors(x, self.k)
         vols = np.mean(distances, axis=1)
         vols = (vols * self.volume_discretizer).astype(int)
@@ -334,15 +276,15 @@ class SimVolPredStdSizeMultiObjectiveCostEstimator(object):
     def compute(self, graphs):
         """compute."""
         x = self.vectorizer.transform(graphs)
-        class_costs, class_variance_costs = self._compute_class_objective(x)
+        class_costs, class_variance_costs = self._estimate_class_objective(x)
         class_costs = - class_costs.reshape(-1, 1)
         class_variance_costs = - class_variance_costs.reshape(-1, 1)
-        similarity_costs = self._compute_similarity_objective(x).reshape(-1, 1)
-        size_costs = self._compute_size_objective(graphs).reshape(-1, 1)
-        volume_costs = - self._compute_volume_objective(x).reshape(-1, 1)
+        sim_costs = self._estimate_similarity_objective(x).reshape(-1, 1)
+        size_costs = self._estimate_size_objective(graphs).reshape(-1, 1)
+        volume_costs = - self._estimate_volume_objective(x).reshape(-1, 1)
         costs = np.hstack([class_costs,
                            class_variance_costs,
-                           similarity_costs,
+                           sim_costs,
                            size_costs,
                            volume_costs])
         return costs
@@ -350,111 +292,73 @@ class SimVolPredStdSizeMultiObjectiveCostEstimator(object):
 # -----------------------------------------------------------------------------
 
 
-def get_pareto_set(items, costs, return_costs=False):
-    """get_pareto_set."""
-    def _remove_duplicates(costs, items):
-        dedup_costs = []
-        dedup_items = []
-        costs = [tuple(c) for c in costs]
-        prev_c = None
-        for c, g in sorted(zip(costs, items)):
-            if prev_c != c:
-                dedup_costs.append(c)
-                dedup_items.append(g)
-                prev_c = c
-        return np.array(dedup_costs), dedup_items
+class MultiObjectiveOptimizer(object):
+    """DistanceOptimizer."""
 
-    def _is_pareto_efficient(costs):
-        is_eff = np.ones(costs.shape[0], dtype=bool)
-        for i, c in enumerate(costs):
-            if is_eff[i]:
-                is_eff[i] = False
-                # Remove dominated points
-                is_eff[is_eff] = np.any(costs[is_eff] < c, axis=1)
-                is_eff[i] = True
-        return is_eff
+    def __init__(
+            self,
+            vectorizer=None,
+            grammar=None,
+            cost_estimator=None,
+            max_neighborhood_order=1,
+            max_n_iter=100):
+        """init."""
+        self.vec = vectorizer
+        self.grammar = grammar
+        self.cost_estimator = cost_estimator
+        self.max_neighborhood_order = max_neighborhood_order
+        self.max_n_iter = max_n_iter
 
-    def _pareto_front(costs):
-        return [i for i, p in enumerate(_is_pareto_efficient(costs)) if p]
+    def fit(self, desired_distances, reference_graphs):
+        """fit."""
+        self.cost_estimator.fit_local(reference_graphs, desired_distances)
 
-    def _pareto_set(items, costs, return_costs=False):
-        ids = _pareto_front(costs)
-        select_items = [items[i] for i in ids]
-        if return_costs:
-            select_costs = np.array([costs[i] for i in ids])
-            return select_items, select_costs
+    def sample(self, reference_graphs):
+        """Optimize iteratively."""
+        # setup
+        iteration_step_ = curry(self._iteration_step)(
+            self.grammar, self.cost_estimator, self.max_neighborhood_order)
+        state_dict = dict()
+        state_dict['visited'] = set()
+        n_neigh_steps = 1
+        start_graphs = self.grammar.set_neighborhood(reference_graphs)
+        costs = self.cost_estimator.compute(start_graphs)
+        state_dict['pareto_set'] = get_pareto_set(start_graphs, costs)
+        seed_graph = random.choice(state_dict['pareto_set'])
+        arg = (seed_graph, state_dict, n_neigh_steps)
+        # iterate
+        arg = last(islice(iterate(iteration_step_, arg), self.max_n_iter))
+        seed_graph, state_dict, n_neigh_steps = arg
+        pareto_set_graphs = state_dict['pareto_set']
+        return pareto_set_graphs
+
+    def _iteration_step(
+            self,
+            grammar,
+            cost_estimator,
+            max_neighborhood_order,
+            arg):
+        """iteration_step."""
+        graph, state_dict, n_neigh_steps = arg
+        if graph is None:
+            return arg
+        state_dict['visited'].add(graph)
+        graphs = grammar.iterated_neighborhood(graph)
+        if graphs:
+            graphs = graphs + state_dict['pareto_set']
+            costs = cost_estimator.compute(graphs)
+            state_dict['pareto_set'] = get_pareto_set(graphs, costs)
+        eligible_graphs = [g for g in state_dict['pareto_set']
+                           if g not in state_dict['visited']]
+        if len(eligible_graphs) > 0:
+            new_graph = random.choice(eligible_graphs)
+            n_neigh_steps = max(n_neigh_steps - 1, 1)
         else:
-            return select_items
-
-    costs, items = _remove_duplicates(costs, items)
-    return _pareto_set(items, costs, return_costs)
-
-
-def iteration_step(grammar,
-                   cost_estimator,
-                   max_neighborhood_order,
-                   arg):
-    """iteration_step."""
-    graph, state_dict, n_neigh_steps = arg
-    if graph is None:
+            if n_neigh_steps + 1 > max_neighborhood_order:
+                new_graph = None
+                n_neigh_steps = 1
+            else:
+                new_graph = random.choice(state_dict['pareto_set'])
+                n_neigh_steps += 1
+        arg = (new_graph, state_dict, n_neigh_steps)
         return arg
-    state_dict['visited'].add(graph)
-    graphs = grammar.iterated_neighborhood(graph)
-    if graphs:
-        graphs = graphs + state_dict['pareto_set']
-        costs = cost_estimator.compute(graphs)
-        state_dict['pareto_set'] = get_pareto_set(graphs, costs)
-    eligible_graphs = [g for g in state_dict['pareto_set']
-                       if g not in state_dict['visited']]
-    if len(eligible_graphs) > 0:
-        new_graph = random.choice(eligible_graphs)
-        n_neigh_steps = max(n_neigh_steps - 1, 1)
-    else:
-        if n_neigh_steps + 1 > max_neighborhood_order:
-            new_graph = None
-            n_neigh_steps = 1
-        else:
-            new_graph = random.choice(state_dict['pareto_set'])
-            n_neigh_steps += 1
-    arg = (new_graph, state_dict, n_neigh_steps)
-    return arg
-
-
-def iterative_optimize(reference_graphs,
-                       grammar,
-                       cost_estimator,
-                       max_neighborhood_order,
-                       max_n_iter):
-    """iterative_optimize."""
-    # setup
-    iteration_step_ = curry(iteration_step)(
-        grammar, cost_estimator, max_neighborhood_order)
-    state_dict = dict()
-    state_dict['visited'] = set()
-    n_neigh_steps = 1
-    start_graphs = grammar.set_neighborhood(reference_graphs)
-    costs = cost_estimator.compute(start_graphs)
-    state_dict['pareto_set'] = get_pareto_set(start_graphs, costs)
-    seed_graph = random.choice(state_dict['pareto_set'])
-    arg = (seed_graph, state_dict, n_neigh_steps)
-    arg = last(islice(iterate(iteration_step_, arg), max_n_iter))
-    seed_graph, state_dict, n_neigh_steps = arg
-    return state_dict['pareto_set']
-
-
-def optimize_desired_distances(start_graph,
-                               desired_distances,
-                               reference_graphs,
-                               vectorizer,
-                               grammar,
-                               cost_estimator,
-                               max_neighborhood_order=1,
-                               max_n_iter=50):
-    """optimize_desired_distances."""
-    cost_estimator.fit_local(reference_graphs, desired_distances)
-    pareto_set_graphs = iterative_optimize(reference_graphs,
-                                           grammar,
-                                           cost_estimator,
-                                           max_neighborhood_order,
-                                           max_n_iter)
-    return pareto_set_graphs

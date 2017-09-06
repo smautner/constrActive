@@ -46,7 +46,7 @@ def min_similarity_selection(matrix, scores=None, max_num=None):
 
 def _outliers(graphs, k=3):
     vec = Vectorizer(r=3, d=3,
-                     normalization=False, inner_normalization=False, n_jobs=1)
+                     normalization=False, inner_normalization=False)
     x = vec.transform(graphs)
     knn = NearestNeighbors()
     knn.fit(x)
@@ -75,7 +75,7 @@ def _select_non_outliers(graphs, k=3):
 
 def _remove_similar_pairs(graphs):
     vec = Vectorizer(r=3, d=3,
-                     normalization=False, inner_normalization=False, n_jobs=1)
+                     normalization=False, inner_normalization=False)
     x = vec.transform(graphs)
     matrix = cosine_similarity(x)
     scores = np.array([1] * len(graphs))
