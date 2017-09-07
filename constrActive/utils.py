@@ -69,7 +69,7 @@ def _outliers(graphs, k=3):
 def _select_non_outliers(graphs, k=3):
     outlier_list, non_outlier_list = _outliers(graphs, k)
     graphs = [graphs[i] for i in non_outlier_list]
-    logging.info('outlier removal:%d' % len(graphs))
+    logging.debug('outlier removal:%d' % len(graphs))
     return graphs
 
 
@@ -83,7 +83,7 @@ def _remove_similar_pairs(graphs):
                                    scores=scores,
                                    max_num=len(graphs) / 2)
     graphs = [graphs[i] for i in ids]
-    logging.info('similar pairs removal:%d' % len(graphs))
+    logging.debug('similar pairs removal:%d' % len(graphs))
     return graphs
 
 
@@ -93,14 +93,14 @@ def _size_filter(graphs, fraction_to_remove=.1):
     graphs = sorted(graphs, key=lambda g: len(g))[:int(size * frac)]
     graphs = sorted(graphs, key=lambda g: len(g), reverse=True)
     graphs = graphs[:int(size * frac)]
-    logging.info('size filter:%d' % len(graphs))
+    logging.debug('size filter:%d' % len(graphs))
     return graphs
 
 
 def _random_sample(graphs, max_size):
     if len(graphs) > max_size:
         graphs = random.sample(graphs, max_size)
-    logging.info('random sample:%d' % len(graphs))
+    logging.debug('random sample:%d' % len(graphs))
     return graphs
 
 
@@ -111,7 +111,7 @@ def pre_process(graphs,
                 remove_similar=True,
                 max_size=500):
     """pre_process."""
-    logging.info('original size:%d' % len(graphs))
+    logging.debug('original size:%d' % len(graphs))
     graphs = _random_sample(graphs, initial_max_size)
     graphs = _size_filter(graphs, fraction_to_remove)
     graphs = _select_non_outliers(graphs, k=n_neighbors_for_outliers)

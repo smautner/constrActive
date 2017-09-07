@@ -46,7 +46,6 @@ class IdealGraphEstimator(object):
         self.vec = Vectorizer(r=r, d=d,
                               normalization=True,
                               inner_normalization=True,
-                              n_jobs=1,
                               nbits=16)
         self.gs = [.05, .1, .2, .4, .6, .8, 1, 2, 4, 6]
 

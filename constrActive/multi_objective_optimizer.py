@@ -222,8 +222,13 @@ class MultiObjectiveCostEstimator(object):
 class DistanceBiasSizeCostEstimator(MultiObjectiveCostEstimator):
     """DistanceBiasSizeCostEstimator."""
 
-    def __init__(self, estimators=None):
+    def __init__(self, r=3, d=3, estimators=None):
         """Initialize."""
+        self.vec = Vectorizer(
+            r=r,
+            d=d,
+            normalization=False,
+            inner_normalization=False)
         super(DistanceBiasSizeCostEstimator, self).__init__(estimators)
 
     @timeit
@@ -233,15 +238,10 @@ class DistanceBiasSizeCostEstimator(MultiObjectiveCostEstimator):
             reference_graphs,
             ranked_graphs):
         """fit."""
-        vec = Vectorizer(
-            complexity=3,
-            normalization=False,
-            inner_normalization=False)
-
-        d_est = InstancesMultiDistanceCostEstimator(vec)
+        d_est = InstancesMultiDistanceCostEstimator(self.vec)
         d_est.fit(desired_distances, reference_graphs)
 
-        b_est = RankBiasCostEstimator(vec, improve=True)
+        b_est = RankBiasCostEstimator(self.vec, improve=True)
         b_est.fit(ranked_graphs)
 
         s_est = SizeCostEstimator()
@@ -530,3 +530,32 @@ class MultiObjectiveSamplerBKP(object):
         vecs = vec.transform(gs)
         ds = euclidean_distances(vecs, ref)
         return np.percentile(ds, 50)
+
+# -----------------------------------------------------------------------------
+
+
+def construct(
+        reference_graphs,
+        desired_distances,
+        loc_graphs,
+        r=2,
+        d=5,
+        min_count=1,
+        max_n_neighbors=None,
+        n_iter=20,
+        k_best=5):
+    """construct."""
+    pgo = ParetoGraphOptimizer(
+        radius_list=[0, 1, 2, 3],
+        thickness_list=[2],
+        min_cip_count=min_count,
+        min_interface_count=min_count,
+        max_n_neighbors=max_n_neighbors,
+        n_iter=n_iter)
+    pgo.fit(loc_graphs)
+    multiobj_est = DistanceBiasSizeCostEstimator(r=r, d=d)
+    multiobj_est.fit(desired_distances, reference_graphs, loc_graphs)
+    pgo.get_objectives(multiobj_est)
+    graphs = pgo.optimize(reference_graphs)
+    graphs = multiobj_est.select(graphs, k_best=k_best)
+    return graphs
