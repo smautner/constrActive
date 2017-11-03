@@ -80,24 +80,30 @@ class VolumeConstructor(object):
 
     def sample(self, sample_graphs):
         """sample."""
+        # pareto filter using similarity of the dataset for initial seed
         costs = self.sim_cost_estimator.compute(sample_graphs)
         seed_graphs = get_pareto_set(sample_graphs, costs)
 
+        # run optimization in parallel
         pareto_graphs_list = self._optimize_parallel(seed_graphs)
+        self._log_result(pareto_graphs_list)
 
+        # join all pareto sets
+        pareto_set_graphs = pipe(pareto_graphs_list, concat, list)
+
+        # pareto filter using similarity of the solutions
+        pareto_set_costs = self.sim_cost_estimator.compute(pareto_set_graphs)
+        sel_pareto_set_graphs = get_pareto_set(pareto_set_graphs,
+                                               pareto_set_costs)
+        logger.info('#constructed graphs:%5d' % (len(sel_pareto_set_graphs)))
+        return sel_pareto_set_graphs
+
+    def _log_result(self, pareto_graphs_list):
         tot_size = sum(len(graphs) for graphs in pareto_graphs_list)
         msg = 'pareto set sizes [%d]: ' % tot_size
         for graphs in pareto_graphs_list:
             msg += '[%d]' % len(graphs)
         logger.info(msg)
-        pareto_set_graphs = pipe(pareto_graphs_list, concat, list)
-
-        pareto_set_costs = self.sim_cost_estimator.compute(pareto_set_graphs)
-        sel_pareto_set_graphs = get_pareto_set(
-            pareto_set_graphs,
-            pareto_set_costs)
-        logger.info('#constructed graphs:%5d' % (len(sel_pareto_set_graphs)))
-        return sel_pareto_set_graphs
 
     def _optimize_parallel(self, reference_graphs):
         """optimize_parallel."""
@@ -110,8 +116,7 @@ class VolumeConstructor(object):
         pool.join()
         return pareto_set_graphs_list
 
-    def _optimize_single(self, reference_graph):
-        """optimize_single."""
+    def _get_constraints(self, reference_graph):
         reference_vec = self.non_norm_vec.transform([reference_graph])
         # find neighbors
         neighbors = self.nn_estimator.kneighbors(
@@ -129,6 +134,12 @@ class VolumeConstructor(object):
             avg_reference_vec,
             reference_vecs)
         desired_distances = desired_distances[0]
+        return reference_graphs, desired_distances
+
+    def _optimize_single(self, reference_graph):
+        """optimize_single."""
+        res = self._get_constraints(reference_graph)
+        reference_graphs, desired_distances = res
         moo = MultiObjectiveOptimizer(
             self.vec,
             self.grammar,

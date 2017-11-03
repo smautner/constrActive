@@ -8,7 +8,7 @@ from sklearn.linear_model import Perceptron
 from toolz import concat
 from collections import defaultdict
 from scipy.sparse import vstack
-from constrActive.constructor import VolumeConstructor
+from constrActive.multi_objective_optimizer import NearestNeighborsMeanOptimizer
 from eden.graph import Vectorizer
 
 import logging
@@ -24,22 +24,14 @@ class IdealGraphEstimator(object):
             max_n_neighbors=100,
             r=3,
             d=3,
-            class_discretizer=2,
-            class_std_discretizer=1,
-            similarity_discretizer=10,
-            size_discretizer=1,
-            volume_discretizer=10,
-            n_neighbors=10):
+            n_neighbors=10,
+            max_num_solutions=30):
         """construct."""
         self.min_count = min_count
         self.max_n_neighbors = max_n_neighbors
+        self.max_num_solutions = max_num_solutions
         self.r = r
         self.d = d
-        self.class_discretizer = class_discretizer
-        self.class_std_discretizer = class_std_discretizer
-        self.similarity_discretizer = similarity_discretizer
-        self.size_discretizer = size_discretizer
-        self.volume_discretizer = volume_discretizer
         self.n_neighbors = n_neighbors
 
         self.clf = Perceptron(n_iter=500)
@@ -52,7 +44,7 @@ class IdealGraphEstimator(object):
     def fit(self, pos_graphs, neg_graphs):
         """fit."""
         ref_graphs = self.construct(pos_graphs, neg_graphs)
-        logger.info('Working on %d constructed graphs' % len(ref_graphs))
+        logger.debug('Working on %d constructed graphs' % len(ref_graphs))
         y = [1] * len(pos_graphs) + [-1] * len(neg_graphs)
         x = self.vec.transform(pos_graphs + neg_graphs)
         z = self.vec.transform(ref_graphs)
@@ -63,7 +55,7 @@ class IdealGraphEstimator(object):
         n_inst, n_feat = k.shape
         txt = 'RFECV on %d instances with %d features with step: %d' % \
             (n_inst, n_feat, step)
-        logger.info(txt)
+        logger.debug(txt)
         selector = RFECV(self.clf, step=step, cv=10)
         selector = selector.fit(k, y)
 
@@ -99,20 +91,21 @@ class IdealGraphEstimator(object):
             max_n_neighbors=self.max_n_neighbors,
             r=self.r,
             d=self.d,
-            class_discretizer=self.class_discretizer,
-            class_std_discretizer=self.class_std_discretizer,
-            similarity_discretizer=self.similarity_discretizer,
-            size_discretizer=self.size_discretizer,
-            volume_discretizer=self.volume_discretizer,
-            n_neighbors=self.n_neighbors)
-        self.active_constr = VolumeConstructor(improve=False, **args)
+            n_landmarks=5,
+            n_neighbors=self.n_neighbors,
+            n_iter=20,
+            k_best=5,
+            max_num_solutions=self.max_num_solutions)
+        self.active_constr = NearestNeighborsMeanOptimizer(
+            improve=False, **args)
         self.active_constr.fit(pos_graphs, neg_graphs)
         graphs = pos_graphs + neg_graphs
-        active_pareto_set_graphs = self.active_constr.sample(graphs)
+        active_pareto_set_graphs = self.active_constr.optimize(graphs)
 
-        self.pos_constr = VolumeConstructor(improve=True, **args)
+        self.pos_constr = NearestNeighborsMeanOptimizer(
+            improve=True, **args)
         self.pos_constr.fit(pos_graphs, neg_graphs)
-        pareto_set_graphs = self.pos_constr.sample(graphs)
+        pareto_set_graphs = self.pos_constr.optimize(graphs)
 
         sel_constructed_graphs = pareto_set_graphs + active_pareto_set_graphs
         return sel_constructed_graphs
