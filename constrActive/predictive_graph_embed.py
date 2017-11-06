@@ -253,11 +253,10 @@ class PredictiveGraphEmbedder(object):
             nn_negative_bias=1,
             nn_k=7,
             nn_p=2,
-            emb_iter=10,
+            emb_iter=50,
             emb_confidence=2,
-            emb_sample_fraction=0.6,
+            emb_sample_fraction=0.5,
             emb_feature_fraction=1,
-            emb_len_quant=0.5,
             emb_alpha=1,
             emb_gamma=1,
             emb_beta=30):
@@ -273,7 +272,6 @@ class PredictiveGraphEmbedder(object):
             emb_confidence,
             emb_sample_fraction,
             emb_feature_fraction,
-            emb_len_quant,
             emb_alpha,
             emb_gamma,
             emb_beta)
@@ -282,14 +280,13 @@ class PredictiveGraphEmbedder(object):
             n_estimators=[250],
             medium_dim=[10, 25, 50, 100, 250, 500],
             nn_n_estimators=[30],
-            nn_negative_bias=[1],
+            nn_negative_bias=[0, 1],
             nn_k=[1, 3, 5, 7, 11],
             nn_p=[2],
-            emb_iter=[20],
-            emb_confidence=[1.5, 2, 3],
-            emb_sample_fraction=[.6, .75, 1],
+            emb_iter=[50],
+            emb_confidence=[1, 3, 5],
+            emb_sample_fraction=[.5, .75, 1],
             emb_feature_fraction=[.01, .05, .1, .3, .5, .7, 1],
-            emb_len_quant=[50],
             emb_alpha=[0, 1, 3],
             emb_gamma=[1],
             emb_beta=[20, 30, 40])
@@ -307,7 +304,6 @@ class PredictiveGraphEmbedder(object):
             emb_confidence=self.emb_confidence,
             emb_sample_fraction=self.emb_sample_fraction,
             emb_feature_fraction=self.emb_feature_fraction,
-            emb_len_quant=self.emb_len_quant,
             emb_alpha=self.emb_alpha,
             emb_gamma=self.emb_gamma,
             emb_beta=self.emb_beta)
@@ -324,7 +320,6 @@ class PredictiveGraphEmbedder(object):
             emb_confidence=2,
             emb_sample_fraction=0.6,
             emb_feature_fraction=1,
-            emb_len_quant=0.5,
             emb_alpha=1,
             emb_gamma=1,
             emb_beta=30):
@@ -339,7 +334,6 @@ class PredictiveGraphEmbedder(object):
         self.emb_confidence = emb_confidence
         self.emb_sample_fraction = emb_sample_fraction
         self.emb_feature_fraction = emb_feature_fraction
-        self.emb_len_quant = emb_len_quant
         self.emb_alpha = emb_alpha
         self.emb_gamma = emb_gamma
         self.emb_beta = emb_beta
@@ -403,7 +397,6 @@ class PredictiveGraphEmbedder(object):
             sample_fraction=self.emb_sample_fraction,
             feature_fraction=self.emb_feature_fraction,
             feature_p=feature_p,
-            len_quant=self.emb_len_quant,
             alpha=self.emb_alpha,
             gamma=self.emb_gamma,
             beta=self.emb_beta)
