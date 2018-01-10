@@ -15,6 +15,8 @@ from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.model_selection import train_test_split
 from sklearn.neighbors import NearestNeighbors
 from pareto_funcs import get_pareto_set
+import dill
+import os.path
 
 import logging
 logger = logging.getLogger(__name__)
@@ -316,8 +318,10 @@ class MultiObjectiveOptimizer(object):
     def sample(self, reference_graphs):
         """Optimize iteratively."""
         # setup
-        iteration_step_ = curry(self._iteration_step)(
-            self.grammar, self.cost_estimator, self.max_neighborhood_order)
+        #iteration_step_ = curry(self._iteration_step)(
+        #    self.grammar, self.cost_estimator, self.max_neighborhood_order)
+        iteration_step_ = lambda x: self._iteration_step(self.grammar,self.cost_estimator,
+                self.max_neighborhood_order,x)
         state_dict = dict()
         state_dict['visited'] = set()
         n_neigh_steps = 1
@@ -361,4 +365,26 @@ class MultiObjectiveOptimizer(object):
                 new_graph = random.choice(state_dict['pareto_set'])
                 n_neigh_steps += 1
         arg = (new_graph, state_dict, n_neigh_steps)
+        log_iteration_step(arg)
         return arg
+
+
+
+def log_iteration_step(arg):
+    if logger.level <= 10:
+        logfilename= 'pareto_arg_log'
+        if not os.path.isfile(logfilename):
+            logger.log(10,"logging into %s" % logfilename)
+        with open(logfilename, "a") as f:
+            f.write(dill.dumps(arg)+"#####")
+
+def showlog():
+    import graphlearn01.utils.draw as draw
+    with open("pareto_arg_log","r")  as f:
+        for arg in [dill.loads(e) for e in f.read().split("#####")[:-1]]:
+                draw.graphlearn(arg[1]['pareto_set'])
+
+
+
+
+
